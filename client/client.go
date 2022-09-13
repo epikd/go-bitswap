@@ -28,6 +28,7 @@ import (
 	bsmsg "github.com/ipfs/go-bitswap/message"
 	bmetrics "github.com/ipfs/go-bitswap/metrics"
 	bsnet "github.com/ipfs/go-bitswap/network"
+	"github.com/ipfs/go-bitswap/psiUtil"
 	"github.com/ipfs/go-bitswap/tracer"
 	blocks "github.com/ipfs/go-block-format"
 	"github.com/ipfs/go-cid"
@@ -243,6 +244,15 @@ func (bs *Client) GetBlock(ctx context.Context, k cid.Cid) (blocks.Block, error)
 	ctx, span := internal.StartSpan(ctx, "GetBlock", trace.WithAttributes(attribute.String("Key", k.String())))
 	defer span.End()
 	return bsgetter.SyncGetBlock(ctx, k, bs.GetBlocks)
+}
+
+// PsiGetBlock does the same as GetBlock except changing the CID to a CIDv1 with multi-codec identifier to PsiCidCodec
+func (bs *Client) PsiGetBlock(ctx context.Context, k cid.Cid) (blocks.Block, error) {
+	nk := cid.NewCidV1(psiUtil.PsiCidCodec, k.Hash())
+	log.Infof("CID requested: %v. New CID: %v", k, nk)
+	ctx, span := internal.StartSpan(ctx, "GetBlock", trace.WithAttributes(attribute.String("Key", k.String())))
+	defer span.End()
+	return bsgetter.SyncGetBlock(ctx, nk, bs.GetBlocks)
 }
 
 // GetBlocks returns a channel where the caller may receive blocks that

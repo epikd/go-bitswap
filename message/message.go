@@ -48,6 +48,10 @@ type BitSwapMessage interface {
 	// status for the CID changes when preparing a message.
 	Remove(key cid.Cid)
 
+	// RemoveBP removes any BlockPresence entries for the given CID.
+	// Useful for message manipulation in the network component.
+	RemoveBP(key cid.Cid)
+
 	// Empty indicates whether the message has any information
 	Empty() bool
 	// Size returns the size of the message in bytes
@@ -304,6 +308,10 @@ func (m *impl) SetPendingBytes(pendingBytes int32) {
 
 func (m *impl) Remove(k cid.Cid) {
 	delete(m.wantlist, k)
+}
+
+func (m *impl) RemoveBP(k cid.Cid) {
+	delete(m.blockPresences, k)
 }
 
 func (m *impl) Cancel(k cid.Cid) int {

@@ -2,9 +2,12 @@ module github.com/ipfs/go-bitswap
 
 require (
 	github.com/benbjohnson/clock v1.3.0
+	github.com/cloudflare/circl v1.2.0
 	github.com/cskr/pubsub v1.0.2
+	github.com/epikd/psiMagic v0.0.0-20220913070932-e1de31b52092
 	github.com/gogo/protobuf v1.3.2
 	github.com/google/uuid v1.3.0
+	github.com/ipfs/bbloom v0.0.4
 	github.com/ipfs/go-block-format v0.0.3
 	github.com/ipfs/go-cid v0.2.0
 	github.com/ipfs/go-datastore v0.5.1
@@ -25,6 +28,8 @@ require (
 	github.com/libp2p/go-libp2p-testing v0.12.0
 	github.com/libp2p/go-msgio v0.2.0
 	github.com/multiformats/go-multiaddr v0.6.0
+	github.com/multiformats/go-multicodec v0.5.0
+	github.com/multiformats/go-multihash v0.2.1
 	github.com/multiformats/go-multistream v0.3.3
 	github.com/stretchr/testify v1.8.0
 	go.opentelemetry.io/otel v1.7.0
@@ -34,6 +39,7 @@ require (
 )
 
 require (
+	github.com/bwesterb/go-ristretto v1.2.1 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.1.0 // indirect
 	github.com/go-logr/logr v1.2.3 // indirect
@@ -42,7 +48,6 @@ require (
 	github.com/google/gopacket v1.1.19 // indirect
 	github.com/hashicorp/golang-lru v0.5.4 // indirect
 	github.com/huin/goupnp v1.0.3 // indirect
-	github.com/ipfs/bbloom v0.0.4 // indirect
 	github.com/ipfs/go-ipfs-ds-help v1.1.0 // indirect
 	github.com/ipfs/go-ipfs-pq v0.0.2 // indirect
 	github.com/ipfs/go-log/v2 v2.5.1 // indirect
@@ -66,8 +71,6 @@ require (
 	github.com/multiformats/go-multiaddr-dns v0.3.1 // indirect
 	github.com/multiformats/go-multiaddr-fmt v0.1.0 // indirect
 	github.com/multiformats/go-multibase v0.1.1 // indirect
-	github.com/multiformats/go-multicodec v0.5.0 // indirect
-	github.com/multiformats/go-multihash v0.2.1 // indirect
 	github.com/multiformats/go-varint v0.0.6 // indirect
 	github.com/opentracing/opentracing-go v1.2.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect

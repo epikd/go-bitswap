@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cloudflare/circl/group"
 	"github.com/google/uuid"
 
 	wl "github.com/ipfs/go-bitswap/client/wantlist"
@@ -14,6 +15,7 @@ import (
 	bsmsg "github.com/ipfs/go-bitswap/message"
 	pb "github.com/ipfs/go-bitswap/message/pb"
 	bmetrics "github.com/ipfs/go-bitswap/metrics"
+	"github.com/ipfs/go-bitswap/psiUtil"
 	blocks "github.com/ipfs/go-block-format"
 	"github.com/ipfs/go-cid"
 	bstore "github.com/ipfs/go-ipfs-blockstore"
@@ -140,6 +142,7 @@ type Engine struct {
 	outbox chan (<-chan *Envelope)
 
 	bsm *blockstoreManager
+	spu *psiUtil.ServerPsiUtil
 
 	peerTagger PeerTagger
 
@@ -349,6 +352,13 @@ func newEngine(
 		tagQueued:                       fmt.Sprintf(tagFormat, "queued", uuid.New().String()),
 		tagUseful:                       fmt.Sprintf(tagFormat, "useful", uuid.New().String()),
 	}
+
+	pu, err := psiUtil.NewServerPsiUtil(group.Ristretto255)
+	if err != nil {
+		log.Debugf("Failed to initialize PSIUtility")
+		panic(err)
+	}
+	e.spu = pu
 
 	for _, opt := range opts {
 		opt(e)
@@ -644,7 +654,8 @@ func (e *Engine) MessageReceived(ctx context.Context, p peer.ID, m bsmsg.BitSwap
 	}()
 
 	// Dispatch entries
-	wants, cancels := e.splitWantsCancels(entries)
+	psi, sreq, rest := e.splitPSI(entries)
+	wants, cancels := e.splitWantsCancels(rest)
 	wants, denials := e.splitWantsDenials(p, wants)
 
 	// Get block sizes
@@ -665,6 +676,7 @@ func (e *Engine) MessageReceived(ctx context.Context, p peer.ID, m bsmsg.BitSwap
 	for _, entry := range cancels {
 		e.peerLedger.CancelWant(p, entry.Cid)
 	}
+	//e.peerLedger.Wants(p, sreq)
 	e.lock.Unlock()
 
 	// Get the ledger for the peer
@@ -708,6 +720,37 @@ func (e *Engine) MessageReceived(ctx context.Context, p peer.ID, m bsmsg.BitSwap
 					HaveBlock:    false,
 					IsWantBlock:  isWantBlock,
 					SendDontHave: entry.SendDontHave,
+				},
+			})
+		}
+	}
+
+	// PSI answers
+	for _, entry := range psi {
+		newCID, err := e.spu.TransformDontHave(entry.Cid)
+		if err != nil {
+			log.Infow("Skipping %v. %w", entry.Cid, err)
+		}
+		entry.Cid = newCID
+		sendDontHave(entry)
+	}
+	if sreq != cid.Undef {
+		keys, err := e.bsm.getallKeys()
+		if err != nil {
+			log.Infow("Could not retrieve stored block CIDs. %w", err)
+		}
+		haves := e.spu.TransformHaves(sreq.Prefix().Codec, keys)
+		for _, have := range haves {
+			newWorkExists = true
+			activeEntries = append(activeEntries, peertask.Task{
+				Topic:    have,
+				Priority: 1,
+				Work:     bsmsg.BlockPresenceSize(have),
+				Data: &taskData{
+					BlockSize:    bsmsg.BlockPresenceSize(have),
+					HaveBlock:    true,
+					IsWantBlock:  false,
+					SendDontHave: false,
 				},
 			})
 		}
@@ -766,6 +809,24 @@ func (e *Engine) MessageReceived(ctx context.Context, p peer.ID, m bsmsg.BitSwap
 		e.peerRequestQueue.PushTasks(p, activeEntries...)
 		e.updateMetrics()
 	}
+}
+
+// Split the PSI want-have from the rest
+func (e *Engine) splitPSI(es []bsmsg.Entry) ([]bsmsg.Entry, cid.Cid, []bsmsg.Entry) {
+	psi := make([]bsmsg.Entry, 0, len(es))
+	rest := make([]bsmsg.Entry, 0, len(es))
+	var htype cid.Cid
+	for _, et := range es {
+		codec := et.Cid.Prefix().Codec
+		if codec == psiUtil.PsiCidCodec && et.WantType == pb.Message_Wantlist_Have {
+			psi = append(psi, et)
+		} else if codec == psiUtil.DummyCidCodecA || codec == psiUtil.DummyCidCodecF {
+			htype = et.Cid
+		} else {
+			rest = append(rest, et)
+		}
+	}
+	return psi, htype, rest
 }
 
 // Split the want-have / want-block entries from the cancel entries

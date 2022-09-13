@@ -147,3 +147,17 @@ func (bsm *blockstoreManager) jobPerKey(ctx context.Context, ks []cid.Cid, jobFn
 	wg.Wait()
 	return err
 }
+
+func (bsm *blockstoreManager) getallKeys() ([]cid.Cid, error) {
+	ctx := context.Background()
+	ch, err := bsm.bs.AllKeysChan(ctx)
+	if err != nil {
+		log.Errorf("Error getting channel")
+		return nil, err
+	}
+	var keys []cid.Cid
+	for key := range ch {
+		keys = append(keys, key)
+	}
+	return keys, nil
+}

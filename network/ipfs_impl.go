@@ -8,8 +8,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/cloudflare/circl/group"
 	bsmsg "github.com/ipfs/go-bitswap/message"
 	"github.com/ipfs/go-bitswap/network/internal"
+	"github.com/ipfs/go-bitswap/psiUtil"
 
 	cid "github.com/ipfs/go-cid"
 	logging "github.com/ipfs/go-log"
@@ -39,6 +41,11 @@ var minSendRate = (100 * 1000) / 8 // 100kbit/s
 func NewFromIpfsHost(host host.Host, r routing.ContentRouting, opts ...NetOpt) BitSwapNetwork {
 	s := processSettings(opts...)
 
+	pu, err := psiUtil.NewClientPsiUtil(group.Ristretto255, true)
+	if err != nil {
+		log.Debugf("Fail to initalize PSI functionality")
+	}
+
 	bitswapNetwork := impl{
 		host:    host,
 		routing: r,
@@ -47,6 +54,9 @@ func NewFromIpfsHost(host host.Host, r routing.ContentRouting, opts ...NetOpt) B
 		protocolBitswapOneZero: s.ProtocolPrefix + ProtocolBitswapOneZero,
 		protocolBitswapOneOne:  s.ProtocolPrefix + ProtocolBitswapOneOne,
 		protocolBitswap:        s.ProtocolPrefix + ProtocolBitswap,
+
+		protocolPSIBitswap: s.ProtocolPrefix + ProtocolPSIBitswap,
+		cpu:                pu,
 
 		supportedProtocols: s.SupportedProtocols,
 	}
@@ -80,6 +90,9 @@ type impl struct {
 	protocolBitswapOneZero protocol.ID
 	protocolBitswapOneOne  protocol.ID
 	protocolBitswap        protocol.ID
+
+	protocolPSIBitswap protocol.ID
+	cpu                *psiUtil.ClientPsiUtil
 
 	supportedProtocols []protocol.ID
 
@@ -249,6 +262,18 @@ func (bsnet *impl) msgToStream(ctx context.Context, s network.Stream, msg bsmsg.
 	// to convert the message to the appropriate format depending on the remote
 	// peer's Bitswap version.
 	switch s.Protocol() {
+	case bsnet.protocolPSIBitswap:
+		if len(msg.Wantlist()) > 0 {
+			log.Infof("Before manipulation - message to %v, Wantlist: %v", s.Conn().RemotePeer().Pretty(), msg.Wantlist())
+		}
+		bsnet.cpu.ManipulateOutgoing(s.Conn().RemotePeer(), msg)
+		if len(msg.Wantlist()) > 0 {
+			log.Infof("After manipulation - message to %v, Wantlist: %v", s.Conn().RemotePeer().Pretty(), msg.Wantlist())
+		}
+		if err := msg.ToNetV1(s); err != nil {
+			log.Debugf("error: %s", err)
+			return err
+		}
 	case bsnet.protocolBitswapOneOne, bsnet.protocolBitswap:
 		if err := msg.ToNetV1(s); err != nil {
 			log.Debugf("error: %s", err)
@@ -427,6 +452,13 @@ func (bsnet *impl) handleNewStream(s network.Stream) {
 		log.Debugf("bitswap net handleNewStream from %s", s.Conn().RemotePeer())
 		bsnet.connectEvtMgr.OnMessage(s.Conn().RemotePeer())
 		atomic.AddUint64(&bsnet.stats.MessagesRecvd, 1)
+		if len(received.BlockPresences()) > 0 {
+			log.Infof("Before manipulation - message from %v, Wants: %v, Haves: %v, DontHaves: %v", p.Pretty(), received.Wantlist(), received.Haves(), received.DontHaves())
+		}
+		bsnet.cpu.ManipulateIncoming(p, received)
+		if len(received.BlockPresences()) > 0 {
+			log.Infof("After manipulation - message from %v, Wants: %v, Haves: %v, DontHaves: %v", p.Pretty(), received.Wantlist(), received.Haves(), received.DontHaves())
+		}
 		for _, v := range bsnet.receivers {
 			v.ReceiveMessage(ctx, p, received)
 		}

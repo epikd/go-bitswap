@@ -23,6 +23,9 @@ var (
 	ProtocolBitswapOneOne = internal.ProtocolBitswapOneOne
 	// ProtocolBitswap is the current version of the bitswap protocol: 1.2.0
 	ProtocolBitswap = internal.ProtocolBitswap
+
+	// ProtocolPSIBitswap is a bitswap v1.2.0 based bitswap protocol using ECDH-PSI
+	ProtocolPSIBitswap = internal.ProtocolPSIBitswap
 )
 
 // BitSwapNetwork provides network connectivity for BitSwap sessions.

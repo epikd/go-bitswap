@@ -28,6 +28,7 @@ var log = logging.Logger("bitswap")
 type bitswap interface {
 	Close() error
 	GetBlock(ctx context.Context, k cid.Cid) (blocks.Block, error)
+	PsiGetBlock(ctx context.Context, k cid.Cid) (blocks.Block, error)
 	GetBlocks(ctx context.Context, keys []cid.Cid) (<-chan blocks.Block, error)
 	GetWantBlocks() []cid.Cid
 	GetWantHaves() []cid.Cid
