@@ -2,7 +2,6 @@ package psiUtil
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
 	"sync"
 	"time"
@@ -20,7 +19,7 @@ import (
 	multih "github.com/multiformats/go-multihash"
 )
 
-var log = logging.Logger("bitswap_network_psi")
+var log = logging.Logger("bitswap_psi")
 
 const (
 	// DST for ec cryptography - server and client need to use the same cyclicGroup and dst
@@ -89,7 +88,7 @@ type ClientPsiUtil struct {
 	idCid map[uint16]cid.Cid
 
 	// map to speed up consecutive requests
-	// Key: plain CID, Value encrypted CID with ID. (V)
+	// Key: plain CID, Value encrypted CID. (V)
 	// for concurrencies -- wantlk
 	wantEnc map[cid.Cid]cid.Cid
 
@@ -99,7 +98,6 @@ type ClientPsiUtil struct {
 	rHaveF map[peer.ID]*bbloom.Bloom
 
 	// Locks
-	idlk    sync.Mutex
 	wantlk  sync.RWMutex
 	rHavelk sync.RWMutex
 
@@ -141,10 +139,9 @@ func NewClientPsiUtil(cyclicGroup group.Group, filter bool) (*ClientPsiUtil, err
 // Get the next available Want-Have identifier.
 // Throws an error if all available wants are taken.
 // The id is not peer specific. Zero indicates the ids are all used.
+// Only used by transformWant
 // This restricts the maximum number of pending "PSI" Want-Haves to (2^16)-2.
 func (cpu *ClientPsiUtil) nextID() uint16 {
-	cpu.idlk.Lock()
-	defer cpu.idlk.Unlock()
 	oid := cpu.id
 	nid := cpu.id
 	_, ok := cpu.idCid[nid]
@@ -163,11 +160,12 @@ func (cpu *ClientPsiUtil) nextID() uint16 {
 	return nid
 }
 
-// Transforms (if necessary) the CID into an encrypted CID with an added ID.
+// Transforms (if necessary) the CID into an encrypted CID.
 // Want is the CID to be transformed
-// Returns the encrypted CID with id.
+// Returns the encrypted CID.
 // In case of an error the plain CID is returned with an error.
-// The id is necessary to map the returned re-encrypted value to the original CID.
+// An id is necessary to map the returned re-encrypted value to the original CID.
+// The id is the code of the multihash.
 // Only the multihash of the CID is encrypted.
 // (take c_i, get v_i, store i in v)
 func (cpu *ClientPsiUtil) transformWant(want cid.Cid) (cid.Cid, error) {
@@ -193,12 +191,7 @@ func (cpu *ClientPsiUtil) transformWant(want cid.Cid) (cid.Cid, error) {
 			return want, fmt.Errorf("Fail (%v): %w", want, err)
 		}
 		// combine encrypted point and id to a multihash
-		var encmhb []byte
-		bid := make([]byte, 2)
-		binary.BigEndian.PutUint16(bid, id)
-		encmhb = append(encmhb, bid...)
-		encmhb = append(encmhb, encp...)
-		encmhb, _ = multihash.Encode(encmhb, cpu.hCode)
+		encmhb, _ := multihash.Encode(encp, uint64(id))
 		_, encmh, err := multihash.MHFromBytes(encmhb)
 		if err != nil {
 			return want, fmt.Errorf("Fail (%v): %w", want, err)
@@ -227,13 +220,13 @@ func (cpu *ClientPsiUtil) transformWant(want cid.Cid) (cid.Cid, error) {
 // (Take w_i, get x_i, and "i" check if x_i element of U)
 func (cpu *ClientPsiUtil) transformRemoteDontHave(p peer.ID, donthave cid.Cid) (cid.Cid, bitswap_message_pb.Message_BlockPresenceType, error) {
 	mt := bitswap_message_pb.Message_DontHave
-	// determine point position
-	pstart := donthave.ByteLen() - int(cpu.pm.Group().Params().CompressedElementLength)
-	if pstart < 0 {
-		return donthave, mt, fmt.Errorf("CID too short.")
+
+	decomh, err := multihash.Decode(donthave.Hash())
+	if err != nil {
+		return donthave, mt, fmt.Errorf("Fail %v: %w", donthave, err)
 	}
-	id := binary.BigEndian.Uint16(donthave.Bytes()[(pstart - 2):pstart]) // extract ID
-	bdecdig, err := cpu.pm.Decrypt(donthave.Bytes()[pstart:])            // decrypt point
+	id := uint16(decomh.Code)                     // extract ID
+	bdecdig, err := cpu.pm.Decrypt(decomh.Digest) // decrypt point
 	if err != nil {
 		return donthave, mt, fmt.Errorf("Fail %v: %w", donthave, err)
 	}
@@ -272,7 +265,7 @@ func (cpu *ClientPsiUtil) transformRemoteDontHave(p peer.ID, donthave cid.Cid) (
 // Clean up completed wants, frees the id for new PSI Want-Haves.
 // Can be called when receiving a block or sending a cancel
 // Nobody else should be allowed to delete only add.
-// Expect the unaltered CID
+// Expects the unaltered CID
 func (cpu *ClientPsiUtil) removeWant(plain cid.Cid) {
 	cpu.wantlk.Lock()
 	id := cpu.cidId[plain]
