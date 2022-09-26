@@ -7,6 +7,7 @@ type NetOpt func(*Settings)
 type Settings struct {
 	ProtocolPrefix     protocol.ID
 	SupportedProtocols []protocol.ID
+	Filter             bool
 }
 
 func Prefix(prefix protocol.ID) NetOpt {
@@ -18,5 +19,11 @@ func Prefix(prefix protocol.ID) NetOpt {
 func SupportedProtocols(protos []protocol.ID) NetOpt {
 	return func(settings *Settings) {
 		settings.SupportedProtocols = protos
+	}
+}
+
+func Filter(filter bool) NetOpt {
+	return func(settings *Settings) {
+		settings.Filter = filter
 	}
 }

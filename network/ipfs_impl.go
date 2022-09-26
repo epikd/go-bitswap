@@ -41,7 +41,7 @@ var minSendRate = (100 * 1000) / 8 // 100kbit/s
 func NewFromIpfsHost(host host.Host, r routing.ContentRouting, opts ...NetOpt) BitSwapNetwork {
 	s := processSettings(opts...)
 
-	pu, err := psiUtil.NewClientPsiUtil(group.Ristretto255, true)
+	pu, err := psiUtil.NewClientPsiUtil(group.Ristretto255, s.Filter)
 	if err != nil {
 		log.Debugf("Fail to initalize PSI functionality")
 	}
