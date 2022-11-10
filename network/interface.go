@@ -52,6 +52,8 @@ type BitSwapNetwork interface {
 
 	Stats() Stats
 
+	ClearHaves()
+
 	Routing
 
 	Pinger

@@ -41,10 +41,22 @@ var minSendRate = (100 * 1000) / 8 // 100kbit/s
 func NewFromIpfsHost(host host.Host, r routing.ContentRouting, opts ...NetOpt) BitSwapNetwork {
 	s := processSettings(opts...)
 
-	pu, err := psiUtil.NewClientPsiUtil(group.Ristretto255, s.Filter)
-	if err != nil {
-		log.Debugf("Fail to initalize PSI functionality")
+	var cu psiUtil.ClientUtil
+	var err error
+	if s.PSI {
+		cu, err = psiUtil.NewClientPsiUtil(group.Ristretto255, s.Filter)
+		if err != nil {
+			log.Debugf("Fail to initalize PSI functionality")
+		}
+		log.Infof("PSI-Swap -- with BF:%v", s.Filter)
+	} else if s.Filter {
+		cu = psiUtil.NewClientFilterUtil()
+		log.Info("Bloom-Swap")
+	} else {
+		cu = &psiUtil.DefaultUtil{}
+		log.Info("Vanilla-Swap")
 	}
+	log.Info("Wantlist:[{{CID Priority Type} Cancel SendDontHave} {{CID Priority Type} Cancel SendDontHave} ...]")
 
 	bitswapNetwork := impl{
 		host:    host,
@@ -56,7 +68,7 @@ func NewFromIpfsHost(host host.Host, r routing.ContentRouting, opts ...NetOpt) B
 		protocolBitswap:        s.ProtocolPrefix + ProtocolBitswap,
 
 		protocolPSIBitswap: s.ProtocolPrefix + ProtocolPSIBitswap,
-		cpu:                pu,
+		cu:                 cu,
 
 		supportedProtocols: s.SupportedProtocols,
 	}
@@ -92,7 +104,7 @@ type impl struct {
 	protocolBitswap        protocol.ID
 
 	protocolPSIBitswap protocol.ID
-	cpu                *psiUtil.ClientPsiUtil
+	cu                 psiUtil.ClientUtil
 
 	supportedProtocols []protocol.ID
 
@@ -248,6 +260,10 @@ func (bsnet *impl) SupportsHave(proto protocol.ID) bool {
 	return true
 }
 
+func (bsnet *impl) ClearHaves() {
+	bsnet.cu.ClearHaves()
+}
+
 func (bsnet *impl) msgToStream(ctx context.Context, s network.Stream, msg bsmsg.BitSwapMessage, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	if dl, ok := ctx.Deadline(); ok && dl.Before(deadline) {
@@ -263,12 +279,23 @@ func (bsnet *impl) msgToStream(ctx context.Context, s network.Stream, msg bsmsg.
 	// peer's Bitswap version.
 	switch s.Protocol() {
 	case bsnet.protocolPSIBitswap:
-		if len(msg.Wantlist()) > 0 {
-			log.Infof("Before manipulation - message to %v, Wantlist: %v", s.Conn().RemotePeer().Pretty(), msg.Wantlist())
+		rcvr := s.Conn().RemotePeer().Pretty()
+		if !msg.Empty() {
+			log.Infof("Sent internal msg to %v -- Blocks: %v, Wantlist: %v, BP: %v", rcvr, len(msg.Blocks()), msg.Wantlist(), msg.BlockPresences())
 		}
-		bsnet.cpu.ManipulateOutgoing(s.Conn().RemotePeer(), msg)
-		if len(msg.Wantlist()) > 0 {
-			log.Infof("After manipulation - message to %v, Wantlist: %v", s.Conn().RemotePeer().Pretty(), msg.Wantlist())
+		out := bsnet.cu.ManipulateOutgoing(s.Conn().RemotePeer(), msg)
+		// Only for bloom-Swap
+		if out != nil {
+			ctx := context.Background()
+			log.Infof("Simulate received from %v: %v", rcvr, out.BlockPresences())
+			for _, v := range bsnet.receivers {
+				v.ReceiveMessage(ctx, s.Conn().RemotePeer(), out)
+			}
+		}
+		if !msg.Empty() {
+			log.Infof("Sent wire msg to %v -- Blocks: %v, Wantlist: %v, BP: %v", rcvr, len(msg.Blocks()), msg.Wantlist(), msg.BlockPresences())
+		} else {
+			return nil
 		}
 		if err := msg.ToNetV1(s); err != nil {
 			log.Debugf("error: %s", err)
@@ -449,18 +476,18 @@ func (bsnet *impl) handleNewStream(s network.Stream) {
 
 		p := s.Conn().RemotePeer()
 		ctx := context.Background()
-		log.Debugf("bitswap net handleNewStream from %s", s.Conn().RemotePeer())
-		bsnet.connectEvtMgr.OnMessage(s.Conn().RemotePeer())
+		log.Debugf("bitswap net handleNewStream from %s", p)
+		bsnet.connectEvtMgr.OnMessage(p)
 		atomic.AddUint64(&bsnet.stats.MessagesRecvd, 1)
-		if len(received.BlockPresences()) > 0 {
-			log.Infof("Before manipulation - message from %v, Wants: %v, Haves: %v, DontHaves: %v", p.Pretty(), received.Wantlist(), received.Haves(), received.DontHaves())
-		}
-		bsnet.cpu.ManipulateIncoming(p, received)
-		if len(received.BlockPresences()) > 0 {
-			log.Infof("After manipulation - message from %v, Wants: %v, Haves: %v, DontHaves: %v", p.Pretty(), received.Wantlist(), received.Haves(), received.DontHaves())
-		}
-		for _, v := range bsnet.receivers {
-			v.ReceiveMessage(ctx, p, received)
+
+		log.Infof("Received wire msg from %v -- Blocks: %v, Wantlist: %v, BP: %v", p.Pretty(), len(received.Blocks()), received.Wantlist(), received.BlockPresences())
+
+		bsnet.cu.ManipulateIncoming(p, received)
+		if !received.Empty() {
+			log.Infof("Received internal from %v -- Blocks: %v, Wantlist: %v, BP: %v", p.Pretty(), len(received.Blocks()), received.Wantlist(), received.BlockPresences())
+			for _, v := range bsnet.receivers {
+				v.ReceiveMessage(ctx, p, received)
+			}
 		}
 	}
 }

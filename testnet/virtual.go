@@ -276,6 +276,8 @@ func (nc *networkClient) ConnectionManager() connmgr.ConnManager {
 	return &connmgr.NullConnMgr{}
 }
 
+func (nc *networkClient) ClearHaves() {}
+
 type messagePasser struct {
 	net    *networkClient
 	target peer.ID

@@ -43,6 +43,7 @@ type bitswap interface {
 	ReceiveMessage(ctx context.Context, p peer.ID, incoming message.BitSwapMessage)
 	Stat() (*Stat, error)
 	WantlistForPeer(p peer.ID) []cid.Cid
+	ClearHaves()
 }
 
 var _ exchange.SessionExchange = (*Bitswap)(nil)
@@ -102,6 +103,12 @@ func (bs *Bitswap) NotifyNewBlocks(ctx context.Context, blks ...blocks.Block) er
 		bs.Client.NotifyNewBlocks(ctx, blks...),
 		bs.Server.NotifyNewBlocks(ctx, blks...),
 	)
+}
+
+// Mainly for testing purposes. Clearing storage.
+func (bs *Bitswap) ClearHaves() {
+	bs.net.ClearHaves()
+	bs.Server.ClearHaves()
 }
 
 type Stat struct {

@@ -142,7 +142,10 @@ type Engine struct {
 	outbox chan (<-chan *Envelope)
 
 	bsm *blockstoreManager
-	spu *psiUtil.ServerPsiUtil
+
+	psi    bool
+	filter bool
+	su     psiUtil.ServerUtil
 
 	peerTagger PeerTagger
 
@@ -238,6 +241,18 @@ func WithTargetMessageSize(size int) Option {
 func WithScoreLedger(scoreledger ScoreLedger) Option {
 	return func(e *Engine) {
 		e.scoreLedger = scoreledger
+	}
+}
+
+func WithPSI(psi bool) Option {
+	return func(e *Engine) {
+		e.psi = psi
+	}
+}
+
+func WithFilter(filter bool) Option {
+	return func(e *Engine) {
+		e.filter = filter
 	}
 }
 
@@ -353,16 +368,27 @@ func newEngine(
 		tagUseful:                       fmt.Sprintf(tagFormat, "useful", uuid.New().String()),
 	}
 
-	pu, err := psiUtil.NewServerPsiUtil(group.Ristretto255)
-	if err != nil {
-		log.Debugf("Failed to initialize PSIUtility")
-		panic(err)
-	}
-	e.spu = pu
-
 	for _, opt := range opts {
 		opt(e)
 	}
+
+	var su psiUtil.ServerUtil
+	var err error
+	if e.psi {
+		su, err = psiUtil.NewServerPsiUtil(group.Ristretto255)
+		if err != nil {
+			log.Debugf("Failed to initialize PSIUtility")
+			panic(err)
+		}
+		log.Info("PSI-Swap")
+	} else if e.filter {
+		su = psiUtil.NewServerFilterUtil()
+		log.Info("Bloom-Swap")
+	} else {
+		su = &psiUtil.DefaultUtil{}
+		log.Info("Vanilla-Swap")
+	}
+	e.su = su
 
 	e.bsm = newBlockstoreManager(bs, e.bstoreWorkerCount, bmetrics.PendingBlocksGauge(ctx), bmetrics.ActiveBlocksGauge(ctx))
 
@@ -397,6 +423,10 @@ func (e *Engine) updateMetrics() {
 		e.activeGauge.Set(float64(stats.NumActive))
 		e.pendingGauge.Set(float64(stats.NumPending))
 	}
+}
+
+func (e *Engine) ClearHaves() {
+	e.su.ClearHaves()
 }
 
 // SetSendDontHaves indicates what to do when the engine receives a want-block
@@ -727,7 +757,7 @@ func (e *Engine) MessageReceived(ctx context.Context, p peer.ID, m bsmsg.BitSwap
 
 	// PSI answers
 	for _, entry := range psi {
-		newCID, err := e.spu.TransformDontHave(entry.Cid)
+		newCID, err := e.su.TransformDontHave(entry.Cid)
 		if err != nil {
 			log.Infow("Skipping %v. %w", entry.Cid, err)
 		}
@@ -739,7 +769,8 @@ func (e *Engine) MessageReceived(ctx context.Context, p peer.ID, m bsmsg.BitSwap
 		if err != nil {
 			log.Infow("Could not retrieve stored block CIDs. %w", err)
 		}
-		haves := e.spu.TransformHaves(sreq.Prefix().Codec, keys)
+		log.Infof("U requested. %v blocks in Storage.", len(keys))
+		haves := e.su.TransformHaves(sreq.Prefix().Codec, keys)
 		for _, have := range haves {
 			newWorkExists = true
 			activeEntries = append(activeEntries, peertask.Task{
@@ -820,11 +851,14 @@ func (e *Engine) splitPSI(es []bsmsg.Entry) ([]bsmsg.Entry, cid.Cid, []bsmsg.Ent
 		codec := et.Cid.Prefix().Codec
 		if codec == psiUtil.PsiCidCodec && et.WantType == pb.Message_Wantlist_Have {
 			psi = append(psi, et)
-		} else if codec == psiUtil.DummyCidCodecA || codec == psiUtil.DummyCidCodecF {
+		} else if codec == psiUtil.DummyCidCodecA || codec == psiUtil.DummyCidCodecF || codec == psiUtil.DummyCodecBF {
 			htype = et.Cid
 		} else {
 			rest = append(rest, et)
 		}
+	}
+	if !e.psi {
+		rest = append(rest, psi...)
 	}
 	return psi, htype, rest
 }

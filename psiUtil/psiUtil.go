@@ -35,6 +35,8 @@ const (
 	DummyCidCodecF = uint64(0xcf)
 	// expected "max" false positive rate of the used filter
 	FPR = float64(0.0001)
+
+	defaultClearDelay = 60 * time.Second
 )
 
 func selectConst(cyclicGroup group.Group) (string, uint64) {
@@ -74,7 +76,6 @@ type ClientPsiUtil struct {
 	filter bool
 
 	// Code of the hashing algorithm used by elliptic curve math - HashToElement
-	// used as the multihash-code for the PSI CIDs
 	hCode uint64
 
 	// map for delete - CID-ID
@@ -129,7 +130,7 @@ func NewClientPsiUtil(cyclicGroup group.Group, filter bool) (*ClientPsiUtil, err
 		rHave:        make(map[peer.ID]*cid.Set),
 		rHaveF:       make(map[peer.ID]*bbloom.Bloom),
 		filter:       filter,
-		rHClearDelay: 60 * time.Second,
+		rHClearDelay: defaultClearDelay,
 		rHClear:      make(map[peer.ID]time.Time),
 	}
 
@@ -277,7 +278,7 @@ func (cpu *ClientPsiUtil) removeWant(plain cid.Cid) {
 
 // Adds a received have to storage.
 // p is the peer.ID of the sender of the CID
-// have is the received CID. It should be the encrypted CID or the bloomfilter
+// have is the received CID. It should be the encrypted CID or the Bloom filter
 // For PSI to work, the cyclicGroup used to encrypt the CID should be the same as the one used by the Client
 // The function stores almost everything and does not perform sanity checks.
 // (store u_i)
@@ -307,6 +308,7 @@ func (cpu *ClientPsiUtil) addRemoteHave(p peer.ID, have cid.Cid) error {
 		}
 		cpu.rHavelk.Lock()
 		cpu.rHaveF[p] = bf
+		cpu.rHClear[p] = time.Now().Add(cpu.rHClearDelay)
 		cpu.rHavelk.Unlock()
 	}
 	return nil
@@ -331,7 +333,7 @@ func (cpu *ClientPsiUtil) requestHave(p peer.ID) bool {
 // Removes marked CID Want-Have Cancel (keep WANT-BLOCK) from the message and from internal memory
 // Add Want-Have of DummyCID if necessary
 // TODO check if bitswap really sends CANCEL_WANT_HAVE or if all get a CANCEL_WANT_BLOCK -- would leak information
-func (cpu *ClientPsiUtil) ManipulateOutgoing(p peer.ID, msg bsmsg.BitSwapMessage) {
+func (cpu *ClientPsiUtil) ManipulateOutgoing(p peer.ID, msg bsmsg.BitSwapMessage) bsmsg.BitSwapMessage {
 	rw := cid.NewSet() // candidates for removeWant
 	psiwh := false     // PSI request?
 	wants := msg.Wantlist()
@@ -378,6 +380,7 @@ func (cpu *ClientPsiUtil) ManipulateOutgoing(p peer.ID, msg bsmsg.BitSwapMessage
 		dummycid := cid.NewCidV1(codec, mh)
 		msg.AddEntry(dummycid, 1, bitswap_message_pb.Message_Wantlist_Have, false) // DummyCID symbolizing request all
 	}
+	return nil
 }
 
 // ManipulateIncoming manipulates an incoming message.
@@ -410,12 +413,12 @@ func (cpu *ClientPsiUtil) ManipulateIncoming(p peer.ID, msg bsmsg.BitSwapMessage
 }
 
 // Deal with periodic taks. Needs to be started externally.
-func (pu *ClientPsiUtil) Run(ctx context.Context) {
-	pu.rHTimer = time.NewTimer(pu.rHClearDelay)
+func (cpu *ClientPsiUtil) Run(ctx context.Context) {
+	cpu.rHTimer = time.NewTimer(cpu.rHClearDelay)
 	for {
 		select {
-		case t := <-pu.rHTimer.C:
-			pu.rHCleanup(t)
+		case t := <-cpu.rHTimer.C:
+			cpu.rHCleanup(t)
 		case <-ctx.Done():
 			return
 		}
@@ -423,23 +426,35 @@ func (pu *ClientPsiUtil) Run(ctx context.Context) {
 
 }
 
-// Free up memory and force client to request stored data again.
+// Free up memory, forces client to request stored data again.
 // Serves also for refreshing purposes. New blocks might be announced but deletions are not
-func (pu *ClientPsiUtil) rHCleanup(t time.Time) {
-	pu.rHavelk.Lock()
+func (cpu *ClientPsiUtil) rHCleanup(t time.Time) {
+	cpu.rHavelk.Lock()
 	var delpid []peer.ID
-	for pid, rht := range pu.rHClear {
+	for pid, rht := range cpu.rHClear {
 		if t.After(rht) {
 			delpid = append(delpid, pid)
 		}
 	}
 	for _, pid := range delpid {
-		delete(pu.rHClear, pid)
-		delete(pu.rHave, pid)
-		delete(pu.rHaveF, pid)
+		delete(cpu.rHClear, pid)
+		delete(cpu.rHave, pid)
+		delete(cpu.rHaveF, pid)
 	}
-	pu.rHTimer.Reset(pu.rHClearDelay)
-	pu.rHavelk.Unlock()
+	cpu.rHTimer.Reset(cpu.rHClearDelay)
+	cpu.rHavelk.Unlock()
+}
+
+// Manual clear of stored haves.
+// Free up memory, forces client to request stored data again.
+// Serves also for refreshing purposes. New blocks might be announced but deletions are not
+func (cpu *ClientPsiUtil) ClearHaves() {
+	cpu.rHavelk.Lock()
+	cpu.rHClear = make(map[peer.ID]time.Time)
+	cpu.rHave = make(map[peer.ID]*cid.Set)
+	cpu.rHaveF = make(map[peer.ID]*bbloom.Bloom)
+	cpu.rHavelk.Unlock()
+
 }
 
 // ServerPsiUtil allows the manipultation and management of CID.
@@ -529,8 +544,8 @@ func (spu *ServerPsiUtil) TransformHaves(codec uint64, haves []cid.Cid) []cid.Ci
 	spu.havelk.Unlock()
 	if bfnew {
 		spu.havelk.Lock()
-		puffer := 50 - len(spu.haves)%50 // slightly obfuscate real amount
-		m := puffer + len(spu.haves)
+		margin := 50 - len(spu.haves)%50 // slightly obfuscate real amount
+		m := margin + len(spu.haves)
 		bf, err := bbloom.New(float64(m), FPR)
 		if err != nil {
 			return encHaves
@@ -579,4 +594,18 @@ func (spu *ServerPsiUtil) TransformDontHave(enc cid.Cid) (cid.Cid, error) {
 	}
 
 	return renccid, nil
+}
+
+// Manual Clear of stored Haves
+func (spu *ServerPsiUtil) ClearHaves() {
+	spu.havelk.Lock()
+	bf, err := bbloom.New(float64(10), FPR)
+	if err != nil {
+		log.Info(err)
+	} else {
+		spu.haveF = bf
+	}
+	spu.haves = make(map[cid.Cid]cid.Cid)
+	spu.havelk.Unlock()
+
 }

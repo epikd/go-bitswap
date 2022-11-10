@@ -210,6 +210,20 @@ func MaxOutstandingBytesPerPeer(count int) Option {
 	}
 }
 
+func WithPSI(psi bool) Option {
+	o := decision.WithPSI(psi)
+	return func(bs *Server) {
+		bs.engineOptions = append(bs.engineOptions, o)
+	}
+}
+
+func WithFilter(filter bool) Option {
+	o := decision.WithFilter(filter)
+	return func(bs *Server) {
+		bs.engineOptions = append(bs.engineOptions, o)
+	}
+}
+
 // HasBlockBufferSize configure how big the new blocks buffer should be.
 func HasBlockBufferSize(count int) Option {
 	if count < 0 {
@@ -528,6 +542,10 @@ func (bs *Server) PeerConnected(p peer.ID) {
 }
 func (bs *Server) PeerDisconnected(p peer.ID) {
 	bs.engine.PeerDisconnected(p)
+}
+
+func (bs *Server) ClearHaves() {
+	bs.engine.ClearHaves()
 }
 
 // Close is called to shutdown the Client

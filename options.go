@@ -57,6 +57,14 @@ func WithTaskComparator(comparator server.TaskComparator) Option {
 	return Option{server.WithTaskComparator(comparator)}
 }
 
+func WithPSI(psi bool) Option {
+	return Option{server.WithPSI(psi)}
+}
+
+func WithFilter(filter bool) Option {
+	return Option{server.WithFilter(filter)}
+}
+
 func ProviderSearchDelay(newProvSearchDelay time.Duration) Option {
 	return Option{client.ProviderSearchDelay(newProvSearchDelay)}
 }
